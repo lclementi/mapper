@@ -404,7 +404,7 @@ slist_chase_end(struct filter **begin)
 	return begin;
 }
 
-static void
+void
 parse_filter_chain(const char *expr, struct filter **retp)
 {
 	char *str = strdup(expr);

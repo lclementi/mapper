@@ -73,7 +73,7 @@ signal_alarm(int sig) {
 	each_process(NULL, &stop_non_p_processes, NULL);
 }
 
-static void
+void
 signal_exit(int sig)
 {
 	if (exiting != 0)
@@ -87,7 +87,7 @@ signal_exit(int sig)
 	//alarm(1);
 }
 
-static void
+void
 normal_exit(void)
 {
 	if (options.summary)

@@ -113,7 +113,7 @@ destroy_unwind(struct process *proc)
 #endif /* defined(HAVE_LIBUNWIND) */
 }
 
-static int
+int
 process_bare_init(struct process *proc, const char *filename,
 		  pid_t pid, int was_exec)
 {
@@ -175,7 +175,7 @@ process_bare_init(struct process *proc, const char *filename,
 	return 0;
 }
 
-static void
+void
 process_bare_destroy(struct process *proc, int was_exec)
 {
 	dict_destroy(proc->breakpoints, NULL, NULL, NULL);
