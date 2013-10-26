@@ -108,6 +108,8 @@ execute_program(const char * command, char **argv)
 	} else if (!pid) {	/* child */
 		change_uid(command);
 		trace_me();
+		//TODO fixme
+		putenv("fingerprint=1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890");
 		execvp(command, argv);
 		fprintf(stderr, "Can't execute `%s': %s\n", command,
 			strerror(errno));

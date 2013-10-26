@@ -25,9 +25,11 @@
 #include <errno.h>
 #include <limits.h>
 #include <stdlib.h>
+#include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/user.h>
 #include <sys/ptrace.h>
+#include <fcntl.h>
 
 #include "ltrace.h"
 #include "common.h"
@@ -38,12 +40,82 @@
 	fprintf(stderr, msg);        \
 	exit(-1);  }
 
-
+char * remote_buffer_string = "fingerprint=1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890";
 extern void normal_exit(void);
 extern void signal_exit(int sig);
 extern void parse_filter_chain(const char *expr, struct filter **retp);
 extern int process_bare_init(struct process *proc, const char *filename, pid_t pid, int was_exec);
 extern void process_bare_destroy(struct process *proc, int was_exec);
+
+
+/*
+int
+write_process(pid, ){
+
+	int a;
+	a = ptrace(PTRACE_POKETEXT, pid, sbp->addr + i * sizeof(long), a);
+
+}
+*/
+
+unsigned long int
+find_remote_buffer(unsigned int pid){
+
+	char filename[sizeof ("/proc/0123456789/maps")];
+	sprintf(filename, "/proc/%d/maps", pid);
+
+	FILE * fp = fopen(filename, "rb");
+	char binary_path[PATH_MAX];
+	unsigned long start_addr, end_addr, mmap_offset, length;
+
+
+	int found = 0;
+	while ( fscanf(fp, "%lx-%lx %*c%*c%*c%*c %lx %*x:%*x %*d %[^\n]",
+			&start_addr, &end_addr, &mmap_offset, binary_path) > 0 ){
+		if (strcmp(binary_path, "[stack]") == 0 ){
+			found = 1;
+			break;
+		}
+	}//while
+	fclose(fp);
+
+	if (! found )
+		return 0;
+
+	length = end_addr - start_addr;
+	sprintf(filename, "/proc/%d/mem", pid);
+	int fd = open(filename, O_RDONLY);
+	//ret = fseek(fp, , SEEK_SET);
+	char *base_address = mmap(NULL, length, PROT_READ, MAP_SHARED, fd, start_addr);
+	if (base_address == NULL)
+		ABORT("failed to map n");
+
+	found = 0; //false
+	unsigned long int i, j;
+	for (i = 0; i < length; i++) {
+		if (base_address[i] == remote_buffer_string[0]) {
+			//this could be the goodone
+			found = 1;
+			for (j = 0; j < strlen(remote_buffer_string); i++){
+				if (base_address[i + j] != remote_buffer_string[j]) {
+					break;
+					found = 0;
+				}
+			}
+			if (found)
+				break;
+		}
+	}
+	munmap(base_address, length);
+	close(fd);
+	
+	if (found) {
+		fprintf(stderr, "Pattern found at: %lx\n", start_addr + i);
+		return start_addr + i;
+	}
+	return 1;
+
+}
 
 
 int
@@ -98,6 +170,13 @@ main(int argc, char *argv[]) {
 	
 	trace_set_options(proc);
 	continue_process(pid);
+	unsigned long int remote_buffer = find_remote_buffer(pid);
+	if (! remote_buffer ) 
+		ABORT("Unable to find remove buffer\n");
+
+
+
+	//tracing of process
 	
 	char filename[sizeof ("/proc/0123456789/mem")];
 	sprintf(filename, "/proc/%d/mem", pid);
@@ -118,16 +197,13 @@ main(int argc, char *argv[]) {
 			fflush(fp);
 			if (ret != 0)
 				ABORT("failed to seek\n");
+			/* TODO make the format string with PATH_MAX */
 			ret = fscanf(fp, "%1024s", input_path);
-			//fprintf(stderr, "going to read\n");
-			//ret = fread(input_path, PATH_MAX, 1, fp);
-			//if (ret != 1){ 
 			if (ferror(fp)){
 				ABORT("failed to read\n");
 			}
 			fprintf(stderr, "%s\n", input_path);
 			syscall_ret = 1;
-			//continue_after_syscall(ev->proc, ev->e_un.sysnum, 0);
 		}else if (ev->type == EVENT_SYSCALL && ev->e_un.sysnum == SYS_open && syscall_ret) {
 			//fprintf(stderr, "Ret from open\n");
 			syscall_ret = 0;
