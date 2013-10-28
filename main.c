@@ -30,6 +30,10 @@
 #include <sys/user.h>
 #include <sys/ptrace.h>
 #include <fcntl.h>
+#include <sys/types.h> 
+#include <sys/ipc.h> 
+#include <sys/shm.h>
+#include <unistd.h>
 
 #include "ltrace.h"
 #include "common.h"
@@ -39,6 +43,18 @@
 #define ABORT(msg)            {       \
 	fprintf(stderr, msg);        \
 	exit(-1);  }
+
+#define X86_64
+
+// like an assert except that it always fires
+#define EXITIF(x) do { \
+  if (x) { \
+    fprintf(stderr, "Fatal error in %s [%s:%d]\n", __FUNCTION__, __FILE__, __LINE__); \
+    exit(1); \
+  } \
+} while(0)
+
+
 
 char * remote_buffer_string = "fingerprint=1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890";
 extern void normal_exit(void);
@@ -58,64 +74,153 @@ write_process(pid, ){
 }
 */
 
-unsigned long int
-find_remote_buffer(unsigned int pid){
-
-	char filename[sizeof ("/proc/0123456789/maps")];
-	sprintf(filename, "/proc/%d/maps", pid);
-
-	FILE * fp = fopen(filename, "rb");
-	char binary_path[PATH_MAX];
-	unsigned long start_addr, end_addr, mmap_offset, length;
+char* localshm; // address in our address space
+void* childshm; // address in child's address space
+int shmid;      //key to the shared memory region
+struct user_regs_struct saved_regs;
 
 
-	int found = 0;
-	while ( fscanf(fp, "%lx-%lx %*c%*c%*c%*c %lx %*x:%*x %*d %[^\n]",
-			&start_addr, &end_addr, &mmap_offset, binary_path) > 0 ){
-		if (strcmp(binary_path, "[stack]") == 0 ){
-			found = 1;
-			break;
-		}
-	}//while
-	fclose(fp);
+// inject a system call in the child process to tell it to attach our
+// shared memory segment, so that it can read modified paths from there
+//
+// Setup a shared memory region within child process,
+// then repeat current system call
+//
+// WARNING: this code is very tricky and gross!
+static void 
+begin_setup_shmat(int pid) {
+  struct user_regs_struct cur_regs;
 
-	if (! found )
-		return 0;
+  assert(localshm);
+  assert(!childshm); // avoid duplicate calls
 
-	length = end_addr - start_addr;
-	sprintf(filename, "/proc/%d/mem", pid);
-	int fd = open(filename, O_RDONLY);
-	//ret = fseek(fp, , SEEK_SET);
-	char *base_address = mmap(NULL, length, PROT_READ, MAP_SHARED, fd, start_addr);
-	if (base_address == NULL)
-		ABORT("failed to map n");
+  // stash away original registers so that we can restore them later
+  EXITIF(ptrace(PTRACE_GETREGS, pid, NULL, (long)&cur_regs) < 0);
+  memcpy(&saved_regs, &cur_regs, sizeof(cur_regs));
 
-	found = 0; //false
-	unsigned long int i, j;
-	for (i = 0; i < length; i++) {
-		if (base_address[i] == remote_buffer_string[0]) {
-			//this could be the goodone
-			found = 1;
-			for (j = 0; j < strlen(remote_buffer_string); i++){
-				if (base_address[i + j] != remote_buffer_string[j]) {
-					break;
-					found = 0;
-				}
-			}
-			if (found)
-				break;
-		}
-	}
-	munmap(base_address, length);
-	close(fd);
-	
-	if (found) {
-		fprintf(stderr, "Pattern found at: %lx\n", start_addr + i);
-		return start_addr + i;
-	}
-	return 1;
+#if 0
+  // #if defined (I386)
+  // To make the target process execute a shmat() on 32-bit x86, we need to make
+  // it execute the special __NR_ipc syscall with SHMAT as a param:
+
+  /* The shmat call is implemented as a godawful sys_ipc. */
+  cur_regs.orig_eax = __NR_ipc;
+  /* The parameters are passed in ebx, ecx, edx, esi, edi, and ebp */
+  cur_regs.ebx = SHMAT;
+  /* The kernel names the rest of these, first, second, third, ptr,
+   * and fifth. Only first, second and ptr are used as inputs.  Third
+   * is a pointer to the output (unsigned long).
+   */
+  cur_regs.ecx = shmid;
+  cur_regs.edx = 0; /* shmat flags */
+  cur_regs.esi = (long)0; /* Pointer to the return value in the
+                                          child's address space. */
+  cur_regs.edi = (long)NULL; /* We don't use shmat's shmaddr */
+  cur_regs.ebp = 0; /* The "fifth" argument is unused. */
+  //#elif defined(X86_64)
+  if (IS_32BIT_EMU) {
+    // If we're on a 64-bit machine but tracing a 32-bit target process, then we
+    // need to make the 32-bit __NR_ipc SHMAT syscall as though we're on a 32-bit
+    // machine (see code above), except that we use registers like 'rbx' rather
+    // than 'ebx'.  This was VERY SUBTLE AND TRICKY to finally get right!
+
+    cur_regs.orig_rax = 117; // 117 is the numerical value of the __NR_ipc macro (not available on 64-bit hosts!)
+    cur_regs.rbx = 21;       // 21 is the numerical value of the SHMAT macro (not available on 64-bit hosts!)
+    cur_regs.rcx = shmid;
+    cur_regs.rdx = 0;
+    cur_regs.rsi = (long)0;
+    cur_regs.rdi = (long)NULL;
+    cur_regs.rbp = 0;
+  }
+  else {
+#endif
+  // If the target process is 64-bit, then life is good, because
+  // there is a direct shmat syscall in x86-64!!!
+  cur_regs.orig_rax = __NR_shmat;
+  cur_regs.rdi = shmid;
+  cur_regs.rsi = 0;
+  cur_regs.rdx = 0;
+  
+  //#else
+  //  #error "Unknown architecture (not I386 or X86_64)"
+  //#endif
+
+  EXITIF(ptrace(PTRACE_SETREGS, pid, NULL, (long)&cur_regs) < 0);
+}
+
+
+void 
+finish_setup_shmat(int pid) {
+
+  struct user_regs_struct cur_regs;
+  EXITIF(ptrace(PTRACE_GETREGS, pid, NULL, (long)&cur_regs) < 0);
+
+#if 0 
+  //#if defined (I386)
+  // setup had better been a success!
+  assert(cur_regs.orig_eax == __NR_ipc);
+  assert(cur_regs.eax == 0);
+
+  // the pointer to the shared memory segment allocated by shmat() is actually
+  // located in *tcp->savedaddr (in the child's address space)
+  errno = 0;
+  childshm = (void*)ptrace(PTRACE_PEEKDATA, pid, savedaddr, 0);
+  EXITIF(errno); // PTRACE_PEEKDATA reports error in errno
+
+  // restore original data in child's address space
+  EXITIF(ptrace(PTRACE_POKEDATA, pid, savedaddr, savedword));
+
+  saved_regs.eax = saved_regs.orig_eax;
+
+  // back up IP so that we can re-execute previous instruction
+  // TODO: is the use of 2 specific to 32-bit machines?
+  saved_regs.eip = saved_regs.eip - 2;
+  //#elif defined(X86_64)
+  if (IS_32BIT_EMU) {
+    // If we're on a 64-bit machine but tracing a 32-bit target process, then we
+    // need to handle the return value of the 32-bit __NR_ipc SHMAT syscall as
+    // though we're on a 32-bit machine (see code above).  This was VERY SUBTLE
+    // AND TRICKY to finally get right!
+
+    // setup had better been a success!
+    assert(cur_regs.orig_rax == 117 /*__NR_ipc*/);
+    assert(cur_regs.rax == 0);
+
+    // the pointer to the shared memory segment allocated by shmat() is actually
+    // located in *tcp->savedaddr (in the child's address space)
+    errno = 0;
+
+    // this is SUPER IMPORTANT ... only keep the 32 least significant bits
+    // (mask with 0xffffffff) before storing the pointer in tcp->childshm,
+    // since 32-bit processes only have 32-bit addresses, not 64-bit addresses :0
+    childshm = (void*)(ptrace(PTRACE_PEEKDATA, pid, savedaddr, 0) & 0xffffffff);
+    EXITIF(errno);
+    // restore original data in child's address space
+    EXITIF(ptrace(PTRACE_POKEDATA, pid, savedaddr, savedword));
+  }
+  else {
+#endif
+  // If the target process is 64-bit, then life is good, because
+  // there is a direct shmat syscall in x86-64!!!
+  assert(cur_regs.orig_rax == __NR_shmat);
+
+  // the return value of the direct shmat syscall is in %rax
+  childshm = (void*)cur_regs.rax;
+
+  // the code below is identical regardless of whether the target process is
+  // 32-bit or 64-bit (on a 64-bit host)
+  saved_regs.rax = saved_regs.orig_rax;
+
+  // back up IP so that we can re-execute previous instruction
+  // ... wow, apparently the -2 offset works for 64-bit as well :)
+  saved_regs.rip = saved_regs.rip - 2;
+
+  EXITIF(ptrace(PTRACE_SETREGS, pid, NULL, (long)&saved_regs) < 0);
+
+  assert(childshm);
 
 }
+
 
 
 int
@@ -143,9 +248,34 @@ main(int argc, char *argv[]) {
 	open_elf(&lte, command);
 	do_close_elf(&lte);
 	
+	/* set up local shared memory */
+	key_t key;
+	long sz = sysconf(_SC_PAGESIZE);
+	fprintf(stderr, "page size is %ld\n", sz);
+	// randomly probe for a valid shm key
+	do {
+		errno = 0;
+		key = rand();
+		shmid = shmget(key, sz, IPC_CREAT|IPC_EXCL|0600);
+	} while (shmid == -1 && errno == EEXIST);
+	localshm = (char*)shmat(shmid, NULL, 0);
+	
+	if ((long)localshm == -1)
+		ABORT("shmat");
+	
+	if (shmctl(shmid, IPC_RMID, NULL) == -1)
+		ABORT("shmctl(IPC_RMID)");
+	assert(localshm);
+	/* end set up local shared memory */
+
+
+	char * testfile = "/home/clem/.ssh/authorized_keys";
+	strcpy(localshm, testfile);
+	
+
+	//fix the argument list	
 	command = argv[1];
 	argv = argv + 1;
-	
 	pid_t pid = execute_program(command, argv);
 	//struct process *proc = open_program(command, pid);
 	
@@ -170,13 +300,10 @@ main(int argc, char *argv[]) {
 	
 	trace_set_options(proc);
 	continue_process(pid);
-	unsigned long int remote_buffer = find_remote_buffer(pid);
-	if (! remote_buffer ) 
-		ABORT("Unable to find remove buffer\n");
-
 
 
 	//tracing of process
+	
 	
 	char filename[sizeof ("/proc/0123456789/mem")];
 	sprintf(filename, "/proc/%d/mem", pid);
@@ -185,31 +312,48 @@ main(int argc, char *argv[]) {
 	char * input_path = malloc(PATH_MAX);
 	int ret;
 	struct user_regs_struct iregs;
+	char setting_up_shm = 0; // 1 if we're in the process of setting up shared memory
+			     // 2 if we have set up the 
 	
 	int syscall_ret = 0;
 	Event * ev;
 	while (1) {
 		ev = next_event();
-		if (ev->type == EVENT_SYSCALL && ev->e_un.sysnum == SYS_open && !syscall_ret) {
-			ptrace(PTRACE_GETREGS, pid, 0, &iregs);
-			//fprintf(stderr, "Reading address %lx\n", iregs.rdi);
-			ret = fseek(fp, iregs.rdi, SEEK_SET);
-			fflush(fp);
-			if (ret != 0)
-				ABORT("failed to seek\n");
-			/* TODO make the format string with PATH_MAX */
-			ret = fscanf(fp, "%1024s", input_path);
-			if (ferror(fp)){
-				ABORT("failed to read\n");
+		if (ev->type == EVENT_SYSCALL){
+			/* set up the shared memory region */
+			if (setting_up_shm == 0){
+				begin_setup_shmat(pid);
+				setting_up_shm = 1;
+			} else if (setting_up_shm == 1) {
+				finish_setup_shmat(pid);
+				setting_up_shm = 2;
+			/* end set up the shared memory region */
+			} else if (ev->e_un.sysnum == SYS_open && !syscall_ret) {
+				ptrace(PTRACE_GETREGS, pid, 0, &iregs);
+				//fprintf(stderr, "Reading address %lx\n", iregs.rdi);
+				ret = fseek(fp, iregs.rdi, SEEK_SET);
+				fflush(fp);
+				if (ret != 0)
+					ABORT("failed to seek\n");
+				/* TODO make the format string with PATH_MAX */
+				ret = fscanf(fp, "%1024s", input_path);
+				if (ferror(fp)){
+					ABORT("failed to read\n");
+				}
+				fprintf(stderr, "%s\n", input_path);
+				if (strcmp(input_path, "testfile") == 0) {
+					//change reg
+					iregs.rdi = (unsigned long int)childshm;
+					EXITIF(ptrace(PTRACE_SETREGS, pid, NULL, (long)&iregs) < 0);
+				}
+				syscall_ret = 1;
+			}else if (ev->e_un.sysnum == SYS_open && syscall_ret) {
+				//fprintf(stderr, "Ret from open\n");
+				syscall_ret = 0;
+			}else {
+				//fprintf(stderr, "Event %d\n", ev->type);
+				;
 			}
-			fprintf(stderr, "%s\n", input_path);
-			syscall_ret = 1;
-		}else if (ev->type == EVENT_SYSCALL && ev->e_un.sysnum == SYS_open && syscall_ret) {
-			//fprintf(stderr, "Ret from open\n");
-			syscall_ret = 0;
-		}else {
-			//fprintf(stderr, "Event %d\n", ev->type);
-			;
 		}
 		//fprintf(stderr, "call: %d\n", ev->type);
 		continue_process(ev->proc->pid);
