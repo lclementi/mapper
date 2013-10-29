@@ -38,6 +38,7 @@
 #include "ltrace.h"
 #include "common.h"
 #include "prototype.h"
+#include "uthash.h"
 
 
 #define ABORT(msg)            {       \
@@ -56,7 +57,7 @@
 
 
 
-char * remote_buffer_string = "fingerprint=1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890";
+char * mapping_file = "/etc/fp_mapping";
 extern void normal_exit(void);
 extern void signal_exit(int sig);
 extern void parse_filter_chain(const char *expr, struct filter **retp);
@@ -221,36 +222,60 @@ finish_setup_shmat(int pid) {
 
 }
 
+
+
+struct file_mapping {
+	char * original_path;
+	char * rewritten_path;
+	UT_hash_handle hh;         /* makes this structure hashable */
+};
+
+struct file_mapping * global_mappings;
+
 void
 init_mapping(){
 	FILE *fd;
-	char line_buffer[PATH_MAX];
+	char line_buffer[PATH_MAX * 2];
 	char *orig_file, *remapped_file;
-	unsigned int file_path_length;
+	unsigned int file_path_length, off_set, success;
+	struct file_mapping *mapping;
 
-	fd = fopen("mapping", "r");
+	fd = fopen(mapping_file, "r");
 	EXITIF(fd == NULL);
-	while(fgets(line_buffer, PATH_MAX, fd)) {
+	while(fgets(line_buffer, PATH_MAX * 2, fd)) {
 		/* for each line in the file parse the orginal file*/
+		success = 0;
 		for(file_path_length = 0 ; file_path_length < PATH_MAX; file_path_length++){
 			if (line_buffer[file_path_length] == '\t') {
 				line_buffer[file_path_length] = '\0';
 				orig_file = strdup(line_buffer);
 				EXITIF(orig_file == NULL);
+				success = 1;
+				break;
 			}
 		}
-		file_path_length++;
-		if (fgets(line_buffer, PATH_MAX, fd) == NULL)
-			ABORT("Invalid mapping file");
+		EXITIF(!success);
+		off_set = file_path_length + 1;
+		success = 0;
 		/* parse the remapped file */
 		for(file_path_length = 0 ; file_path_length < PATH_MAX; file_path_length++){
-			if (line_buffer[file_path_length] == '\n') {
-				line_buffer[file_path_length] = '\0';
-				remapped_file = strdup(line_buffer);
+			if (line_buffer[off_set + file_path_length] == '\n') {
+				line_buffer[off_set + file_path_length] = '\0';
+				remapped_file = strdup(line_buffer + off_set);
 				EXITIF(remapped_file == NULL);
+				success = 1;
+				break;
 			}
 		}
-		fprintf(stderr, "%s \t-> %s\n", orig_file, remapped_file);
+		EXITIF(!success);
+		mapping = malloc(sizeof(struct file_mapping));
+		EXITIF(mapping == NULL);
+		mapping->original_path = orig_file;
+		mapping->rewritten_path = remapped_file;
+		HASH_ADD_KEYPTR(hh, global_mappings, mapping->original_path, strlen(mapping->original_path), mapping);
+#if DEBUG
+		fprintf(stderr, "Loading mapping: %s -> %s\n", orig_file, remapped_file);
+#endif
 
 	}
 }//init_mapping
@@ -274,7 +299,6 @@ main(int argc, char *argv[]) {
 	
 	
 	init_global_config();
-
 	init_mapping();
 	
 	/* Check that the binary ABI is supported before
@@ -302,11 +326,6 @@ main(int argc, char *argv[]) {
 		ABORT("shmctl(IPC_RMID)");
 	assert(localshm);
 	/* end set up local shared memory */
-
-
-	char * testfile = "/home/clem/.ssh/authorized_keys";
-	strcpy(localshm, testfile);
-	
 
 	//fix the argument list	
 	command = argv[1];
@@ -345,6 +364,7 @@ main(int argc, char *argv[]) {
 	fprintf(stderr, "filename is %s\n", filename);
 	FILE * fp = fopen(filename, "rb");
 	char * input_path = malloc(PATH_MAX);
+	struct file_mapping *mapping;
 	int ret;
 	struct user_regs_struct iregs;
 	char setting_up_shm = 0; // 1 if we're in the process of setting up shared memory
@@ -375,11 +395,21 @@ main(int argc, char *argv[]) {
 				if (ferror(fp)){
 					ABORT("failed to read\n");
 				}
-				fprintf(stderr, "%s\n", input_path);
-				if (strcmp(input_path, "testfile") == 0) {
-					//change reg
+
+
+				HASH_FIND_STR(global_mappings, input_path, mapping);
+				if (mapping){
+					/* we have to rewrite the file path */
+#ifdef DEBUG
+					fprintf(stderr, "%s -> %s\n", input_path, mapping->rewritten_path);
+#endif
+					strcpy(localshm, mapping->rewritten_path);
 					iregs.rdi = (unsigned long int)childshm;
 					EXITIF(ptrace(PTRACE_SETREGS, pid, NULL, (long)&iregs) < 0);
+				}else{
+#ifdef DEBUG
+					fprintf(stderr, "%s not found\n", input_path);
+#endif
 				}
 				syscall_ret = 1;
 			}else if (ev->e_un.sysnum == SYS_open && syscall_ret) {
