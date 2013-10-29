@@ -221,6 +221,39 @@ finish_setup_shmat(int pid) {
 
 }
 
+void
+init_mapping(){
+	FILE *fd;
+	char line_buffer[PATH_MAX];
+	char *orig_file, *remapped_file;
+	unsigned int file_path_length;
+
+	fd = fopen("mapping", "r");
+	EXITIF(fd == NULL);
+	while(fgets(line_buffer, PATH_MAX, fd)) {
+		/* for each line in the file parse the orginal file*/
+		for(file_path_length = 0 ; file_path_length < PATH_MAX; file_path_length++){
+			if (line_buffer[file_path_length] == '\t') {
+				line_buffer[file_path_length] = '\0';
+				orig_file = strdup(line_buffer);
+				EXITIF(orig_file == NULL);
+			}
+		}
+		file_path_length++;
+		if (fgets(line_buffer, PATH_MAX, fd) == NULL)
+			ABORT("Invalid mapping file");
+		/* parse the remapped file */
+		for(file_path_length = 0 ; file_path_length < PATH_MAX; file_path_length++){
+			if (line_buffer[file_path_length] == '\n') {
+				line_buffer[file_path_length] = '\0';
+				remapped_file = strdup(line_buffer);
+				EXITIF(remapped_file == NULL);
+			}
+		}
+		fprintf(stderr, "%s \t-> %s\n", orig_file, remapped_file);
+
+	}
+}//init_mapping
 
 
 int
@@ -241,6 +274,8 @@ main(int argc, char *argv[]) {
 	
 	
 	init_global_config();
+
+	init_mapping();
 	
 	/* Check that the binary ABI is supported before
 	 * calling execute_program.  */
