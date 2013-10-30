@@ -249,7 +249,7 @@ init_mapping(){
 	while(fgets(line_buffer, PATH_MAX * 2, fd)) {
 		if (line_buffer[0] == '#') {
 			//skip comment
-			break;
+			continue;
 		}
 		/* for each line in the file parse the orginal file*/
 		success = 0;
@@ -376,7 +376,9 @@ main(int argc, char *argv[]) {
 	
 	char filename[sizeof ("/proc/0123456789/mem")];
 	sprintf(filename, "/proc/%d/mem", pid);
+#ifdef DEBUG
 	fprintf(stderr, "filename is %s\n", filename);
+#endif
 	FILE *fp = fopen(filename, "rb");
 	char *input_path = malloc(PATH_MAX);
 	struct file_mapping *mapping;
