@@ -247,6 +247,10 @@ init_mapping(){
 	fd = fopen(mapping_file, "r");
 	EXITIF(fd == NULL);
 	while(fgets(line_buffer, PATH_MAX * 2, fd)) {
+		if (line_buffer[0] == '#') {
+			//skip comment
+			break;
+		}
 		/* for each line in the file parse the orginal file*/
 		success = 0;
 		for(file_path_length = 0 ; file_path_length < PATH_MAX; file_path_length++){
@@ -375,7 +379,6 @@ main(int argc, char *argv[]) {
 	fprintf(stderr, "filename is %s\n", filename);
 	FILE *fp = fopen(filename, "rb");
 	char *input_path = malloc(PATH_MAX);
-	char *tmp;
 	struct file_mapping *mapping;
 	int ret;
 	struct user_regs_struct iregs;
@@ -407,12 +410,6 @@ main(int argc, char *argv[]) {
 				if (ferror(fp)){
 					ABORT("failed to read\n");
 				}
-
-				tmp = realpath(input_path, NULL);
-				EXITIF(!tmp);
-				free(input_path);
-				input_path = tmp;
-
 
 				HASH_FIND_STR(global_mappings, input_path, mapping);
 				if (mapping){
