@@ -291,7 +291,8 @@ main(int argc, char *argv[]) {
 	//atexit(normal_exit);
 	//signal(SIGINT, signal_exit);    /* Detach processes when interrupted */
 	//signal(SIGTERM, signal_exit);   /*  ... or killed */
-	
+
+	pid_t pid;	
 	VECT_INIT(&opt_F, struct opt_F_t);
 	//print syscalls
 	options.syscalls = 1;
@@ -334,7 +335,11 @@ main(int argc, char *argv[]) {
 	//fix the argument list	
 	command = argv[1];
 	argv = argv + 1;
-	pid_t pid = execute_program(command, argv);
+
+	if (command)
+		pid = execute_program(command, argv);
+	else
+		ABORT("You must provide a command to run");
 	//struct process *proc = open_program(command, pid);
 	
 	assert(pid != 0);
