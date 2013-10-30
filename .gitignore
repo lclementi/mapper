@@ -5,6 +5,7 @@
 *.ltrace
 *~
 
+Makefile
 Makefile.in
 
 .deps
