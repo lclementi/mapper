@@ -335,7 +335,6 @@ ACLOCAL_AMFLAGS = -I config/m4
 SUBDIRS = \
 	sysdeps \
 	. \
-	testsuite
 
 noinst_LTLIBRARIES = \
 	libltrace.la
