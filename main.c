@@ -314,13 +314,15 @@ main(int argc, char *argv[]) {
 	
 	/* set up local shared memory */
 	key_t key;
-	long sz = sysconf(_SC_PAGESIZE);
-	fprintf(stderr, "page size is %ld\n", sz);
+	long page_size = sysconf(_SC_PAGESIZE);
+#ifdef DEBUG
+	fprintf(stderr, "page size is %ld\n", page_size);
+#endif
 	// randomly probe for a valid shm key
 	do {
 		errno = 0;
 		key = rand();
-		shmid = shmget(key, sz, IPC_CREAT|IPC_EXCL|0600);
+		shmid = shmget(key, page_size, IPC_CREAT|IPC_EXCL|0600);
 	} while (shmid == -1 && errno == EEXIST);
 	localshm = (char*)shmat(shmid, NULL, 0);
 	
