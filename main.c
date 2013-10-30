@@ -371,8 +371,9 @@ main(int argc, char *argv[]) {
 	char filename[sizeof ("/proc/0123456789/mem")];
 	sprintf(filename, "/proc/%d/mem", pid);
 	fprintf(stderr, "filename is %s\n", filename);
-	FILE * fp = fopen(filename, "rb");
-	char * input_path = malloc(PATH_MAX);
+	FILE *fp = fopen(filename, "rb");
+	char *input_path = malloc(PATH_MAX);
+	char *tmp;
 	struct file_mapping *mapping;
 	int ret;
 	struct user_regs_struct iregs;
@@ -404,6 +405,11 @@ main(int argc, char *argv[]) {
 				if (ferror(fp)){
 					ABORT("failed to read\n");
 				}
+
+				tmp = realpath(input_path, NULL);
+				EXITIF(!tmp);
+				free(input_path);
+				input_path = tmp;
 
 
 				HASH_FIND_STR(global_mappings, input_path, mapping);
