@@ -236,6 +236,31 @@ struct file_mapping {
 
 struct file_mapping * global_mappings;
 
+
+
+char *
+get_base_path(char * input_str){
+	unsigned int len, i;
+	char * return_value;
+
+	assert(input_str);
+	len = strlen(input_str);
+	assert(len);
+
+	for (i = len - 1; i >= 0; i--){
+		if (input_str[i] == '/'){
+			/* we hit the base path length */
+			return_value = malloc(i + i);
+			EXITIF(!return_value);
+			memcpy(return_value, input_str, i);
+			return_value[i] = '\0';
+			return return_value;
+		}
+	}
+	/* we should never get to this point */
+	EXITIF(1);
+}
+
 void
 init_mapping(){
 	FILE *fd;
@@ -285,6 +310,15 @@ init_mapping(){
 		fprintf(stderr, "Loading mapping: %s -> %s\n", orig_file, remapped_file);
 #endif
 
+		/* we need to add directory remapping for stat syscall */
+		mapping = malloc(sizeof(struct file_mapping));
+		EXITIF(mapping == NULL);
+		mapping->original_path = get_base_path(orig_file);
+		mapping->rewritten_path = get_base_path(remapped_file);
+		HASH_ADD_KEYPTR(hh, global_mappings, mapping->original_path, strlen(mapping->original_path), mapping);
+#if DEBUG
+		fprintf(stderr, "Loading mapping: %s -> %s\n", mapping->original_path, mapping->rewritten_path);
+#endif
 	}
 }//init_mapping
 
