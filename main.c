@@ -63,6 +63,10 @@ extern void signal_exit(int sig);
 extern void parse_filter_chain(const char *expr, struct filter **retp);
 extern int process_bare_init(struct process *proc, const char *filename, pid_t pid, int was_exec);
 extern void process_bare_destroy(struct process *proc, int was_exec);
+extern void handle_clone(Event *event);
+extern void handle_new(Event *event);
+
+
 
 
 /*
@@ -374,7 +378,7 @@ main(int argc, char *argv[]) {
 	Event * ev;
 	while (1) {
 		ev = next_event();
-		if (ev->type == EVENT_SYSCALL){
+		if (ev->type == EVENT_SYSCALL && ev->proc && ev->proc->state != STATE_IGNORED){
 			/* set up the shared memory region */
 			if (setting_up_shm == 0){
 				begin_setup_shmat(pid);
@@ -415,13 +419,19 @@ main(int argc, char *argv[]) {
 			}else if (ev->e_un.sysnum == SYS_open && syscall_ret) {
 				//fprintf(stderr, "Ret from open\n");
 				syscall_ret = 0;
-			}else {
-				//fprintf(stderr, "Event %d\n", ev->type);
-				;
 			}
+		} else if (ev->type == EVENT_NEW) {
+			handle_new(ev);
+		} else if (ev->type == EVENT_CLONE || ev->type == EVENT_VFORK ) {
+			handle_clone(ev);
 		}
 		//fprintf(stderr, "call: %d\n", ev->type);
-		continue_process(ev->proc->pid);
+		if ( ev->proc ) 
+			continue_process(ev->proc->pid);
+		else
+#ifdef DEBUG
+			fprintf(stderr, "Unable to continue main process skipping...\n");
+#endif
 	}
 	
 	return 0;

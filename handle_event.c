@@ -49,10 +49,10 @@ static void handle_syscall(Event *event);
 static void handle_arch_syscall(Event *event);
 static void handle_sysret(Event *event);
 static void handle_arch_sysret(Event *event);
-static void handle_clone(Event *event);
+void handle_clone(Event *event);
 static void handle_exec(Event *event);
 static void handle_breakpoint(Event *event);
-static void handle_new(Event *event);
+void handle_new(Event *event);
 
 static void callstack_push_syscall(struct process *proc, int sysnum);
 static void callstack_push_symfunc(struct process *proc,
@@ -264,7 +264,8 @@ pending_new_remove(pid_t pid)
 		}
 }
 
-static void
+
+void
 handle_clone(Event *event)
 {
 	debug(DEBUG_FUNCTION, "handle_clone(pid=%d)", event->proc->pid);
@@ -313,7 +314,7 @@ handle_clone(Event *event)
 		continue_process(newpid);
 }
 
-static void
+void
 handle_new(Event *event)
 {
 	debug(DEBUG_FUNCTION, "handle_new(pid=%d)", event->e_un.newpid);

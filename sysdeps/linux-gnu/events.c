@@ -146,6 +146,7 @@ next_event(void)
 	if ((ev = next_qd_event()) != NULL) {
 		event = *ev;
 		free(ev);
+		fprintf(stderr, "dequeuing event....\n");
 		return &event;
 	}
 
