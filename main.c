@@ -432,6 +432,7 @@ main(int argc, char *argv[]) {
 #ifdef DEBUG
 			fprintf(stderr, "Unable to continue main process skipping...\n");
 #endif
+			;
 	}
 	
 	return 0;
