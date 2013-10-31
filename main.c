@@ -434,7 +434,8 @@ main(int argc, char *argv[]) {
 				finish_setup_shmat(pid);
 				setting_up_shm = 2;
 			/* end set up the shared memory region */
-			} else if (ev->e_un.sysnum == SYS_open && !syscall_ret) {
+			} else if (!syscall_ret && (ev->e_un.sysnum == SYS_open || 
+					ev->e_un.sysnum == SYS_stat )) {
 				ptrace(PTRACE_GETREGS, pid, 0, &iregs);
 				//fprintf(stderr, "Reading address %lx\n", iregs.rdi);
 				ret = fseek(fp, iregs.rdi, SEEK_SET);
@@ -462,7 +463,8 @@ main(int argc, char *argv[]) {
 #endif
 				}
 				syscall_ret = 1;
-			}else if (ev->e_un.sysnum == SYS_open && syscall_ret) {
+			}else if (syscall_ret && (ev->e_un.sysnum == SYS_open || 
+					ev->e_un.sysnum == SYS_stat)) {
 				//fprintf(stderr, "Ret from open\n");
 				syscall_ret = 0;
 			}
