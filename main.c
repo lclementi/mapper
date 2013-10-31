@@ -438,11 +438,11 @@ main(int argc, char *argv[]) {
 				ptrace(PTRACE_GETREGS, pid, 0, &iregs);
 				//fprintf(stderr, "Reading address %lx\n", iregs.rdi);
 				ret = fseek(fp, iregs.rdi, SEEK_SET);
-				fflush(fp);
 				if (ret != 0)
 					ABORT("failed to seek\n");
 				/* TODO make the format string with PATH_MAX */
-				ret = fscanf(fp, "%1024s", input_path);
+				fflush(fp);
+				fgets(input_path, PATH_MAX, fp);
 				if (ferror(fp)){
 					ABORT("failed to read\n");
 				}
