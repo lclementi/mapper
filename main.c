@@ -326,11 +326,38 @@ init_mapping(){
 int
 main(int argc, char *argv[]) {
 
+	struct ltelf lte = {};
+	struct process *proc;
+
+	char mem_filename[sizeof ("/proc/0123456789/mem")];
+	FILE *mem_fp;
+	/* setting_up_shm is 0 if we have to setup shm
+	 * 1 if we're in the process of setting up shared memory
+	 * 2 if we have set it up */
+	char setting_up_shm = 0;
+	key_t key;
+	long page_size = 0;
+	int syscall_return = 0;
+	char *original_path;
+	Event * ev;
+	pid_t pid;
+	struct file_mapping *mapping;
+	int ret;
+	struct user_regs_struct iregs;
+
+
+	page_size = sysconf(_SC_PAGESIZE);
+	proc = malloc(sizeof(*proc));
+	if (proc == NULL) {
+		exit(EXIT_FAILURE);
+	        return -1;
+	}
+
+	original_path = malloc(PATH_MAX);
 	//atexit(normal_exit);
 	//signal(SIGINT, signal_exit);    /* Detach processes when interrupted */
 	//signal(SIGTERM, signal_exit);   /*  ... or killed */
 
-	pid_t pid;	
 	VECT_INIT(&opt_F, struct opt_F_t);
 	//print syscalls
 	options.syscalls = 1;
@@ -346,17 +373,14 @@ main(int argc, char *argv[]) {
 	
 	/* Check that the binary ABI is supported before
 	 * calling execute_program.  */
-	struct ltelf lte = {};
 	open_elf(&lte, command);
 	do_close_elf(&lte);
 	
 	/* set up local shared memory */
-	key_t key;
-	long page_size = sysconf(_SC_PAGESIZE);
 #ifdef DEBUG
 	fprintf(stderr, "page size is %ld\n", page_size);
 #endif
-	// randomly probe for a valid shm key
+	/* randomly probe for a valid shm key */
 	do {
 		errno = 0;
 		key = rand();
@@ -380,14 +404,8 @@ main(int argc, char *argv[]) {
 		pid = execute_program(command, argv);
 	else
 		ABORT("You must provide a command to run");
-	//struct process *proc = open_program(command, pid);
-	
 	assert(pid != 0);
-	struct process *proc = malloc(sizeof(*proc));
-	if (proc == NULL) {
-		exit(EXIT_FAILURE);
-	        return -1;
-	}
+	//struct process *proc = open_program(command, pid);
 	
 	
 	if ((process_bare_init(proc, command, pid, 0) < 0) ||
@@ -399,30 +417,18 @@ main(int argc, char *argv[]) {
 	        exit(EXIT_FAILURE);
 	        return -1;
 	}
-	
-	
 	trace_set_options(proc);
 	continue_process(pid);
 
 
 	//tracing of process
-	
-	
-	char filename[sizeof ("/proc/0123456789/mem")];
-	sprintf(filename, "/proc/%d/mem", pid);
+
+	sprintf(mem_filename, "/proc/%d/mem", pid);
 #ifdef DEBUG
-	fprintf(stderr, "filename is %s\n", filename);
+	fprintf(stderr, "Memory access filename is %s\n", mem_filename);
 #endif
-	FILE *fp = fopen(filename, "rb");
-	char *input_path = malloc(PATH_MAX);
-	struct file_mapping *mapping;
-	int ret;
-	struct user_regs_struct iregs;
-	char setting_up_shm = 0; // 1 if we're in the process of setting up shared memory
-			     // 2 if we have set up the 
-	
-	int syscall_ret = 0;
-	Event * ev;
+	mem_fp = fopen(mem_filename, "rb");
+	EXITIF(mem_fp == NULL);
 	while (1) {
 		ev = next_event();
 		if (ev->type == EVENT_SYSCALL && ev->proc && ev->proc->state != STATE_IGNORED){
@@ -434,39 +440,37 @@ main(int argc, char *argv[]) {
 				finish_setup_shmat(pid);
 				setting_up_shm = 2;
 			/* end set up the shared memory region */
-			} else if (!syscall_ret && (ev->e_un.sysnum == SYS_open || 
+			} else if (!syscall_return && (ev->e_un.sysnum == SYS_open ||
 					ev->e_un.sysnum == SYS_stat )) {
 				ptrace(PTRACE_GETREGS, pid, 0, &iregs);
-				//fprintf(stderr, "Reading address %lx\n", iregs.rdi);
-				ret = fseek(fp, iregs.rdi, SEEK_SET);
+				ret = fseek(mem_fp, iregs.rdi, SEEK_SET);
 				if (ret != 0)
 					ABORT("failed to seek\n");
-				/* TODO make the format string with PATH_MAX */
-				fflush(fp);
-				fgets(input_path, PATH_MAX, fp);
-				if (ferror(fp)){
+				fflush(mem_fp);
+				fgets(original_path, PATH_MAX, mem_fp);
+				if (ferror(mem_fp)){
 					ABORT("failed to read\n");
 				}
-
-				HASH_FIND_STR(global_mappings, input_path, mapping);
+				/* lookup up if we have a mapping for the current path */
+				HASH_FIND_STR(global_mappings, original_path, mapping);
 				if (mapping){
 					/* we have to rewrite the file path */
 #ifdef DEBUG
-					fprintf(stderr, "%s -> %s\n", input_path, mapping->rewritten_path);
+					fprintf(stderr, "%s -> %s\n", original_path, mapping->rewritten_path);
 #endif
 					strcpy(localshm, mapping->rewritten_path);
 					iregs.rdi = (unsigned long int)childshm;
 					EXITIF(ptrace(PTRACE_SETREGS, pid, NULL, (long)&iregs) < 0);
 				}else{
 #ifdef DEBUG
-					fprintf(stderr, "%s not found\n", input_path);
+					fprintf(stderr, "%s not found\n", original_path);
 #endif
 				}
-				syscall_ret = 1;
-			}else if (syscall_ret && (ev->e_un.sysnum == SYS_open || 
+				syscall_return = 1;
+			}else if (syscall_return && (ev->e_un.sysnum == SYS_open ||
 					ev->e_un.sysnum == SYS_stat)) {
 				//fprintf(stderr, "Ret from open\n");
-				syscall_ret = 0;
+				syscall_return = 0;
 			}
 		} else if (ev->type == EVENT_NEW) {
 			handle_new(ev);
@@ -474,7 +478,7 @@ main(int argc, char *argv[]) {
 			handle_clone(ev);
 		}
 		//fprintf(stderr, "call: %d\n", ev->type);
-		if ( ev->proc ) 
+		if ( ev->proc )
 			continue_process(ev->proc->pid);
 		else
 #ifdef DEBUG
@@ -482,7 +486,7 @@ main(int argc, char *argv[]) {
 #endif
 			;
 	}
-	
+	fclose(mem_fp);
 	return 0;
 }
 
