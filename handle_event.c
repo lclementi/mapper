@@ -50,7 +50,7 @@ static void handle_arch_syscall(Event *event);
 static void handle_sysret(Event *event);
 static void handle_arch_sysret(Event *event);
 void handle_clone(Event *event);
-static void handle_exec(Event *event);
+void handle_exec(Event *event);
 static void handle_breakpoint(Event *event);
 void handle_new(Event *event);
 
@@ -478,7 +478,7 @@ handle_syscall(Event *event) {
 	continue_after_syscall(event->proc, event->e_un.sysnum, 0);
 }
 
-static void
+void
 handle_exec(Event *event)
 {
 	struct process *proc = event->proc;

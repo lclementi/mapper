@@ -65,6 +65,7 @@ extern int process_bare_init(struct process *proc, const char *filename, pid_t p
 extern void process_bare_destroy(struct process *proc, int was_exec);
 extern void handle_clone(Event *event);
 extern void handle_new(Event *event);
+extern void handle_exec(Event *event);
 
 
 
@@ -422,7 +423,6 @@ main(int argc, char *argv[]) {
 
 
 	//tracing of process
-
 	sprintf(mem_filename, "/proc/%d/mem", pid);
 #ifdef DEBUG
 	fprintf(stderr, "Memory access filename is %s\n", mem_filename);
@@ -431,7 +431,12 @@ main(int argc, char *argv[]) {
 	EXITIF(mem_fp == NULL);
 	while (1) {
 		ev = next_event();
-		if (ev->type == EVENT_SYSCALL && ev->proc && ev->proc->state != STATE_IGNORED){
+		if (ev->type == EVENT_SIGNAL){
+			ptrace(PTRACE_SYSCALL, ev->proc->pid, 0, 
+				(void *)(uintptr_t)ev->e_un.signum);
+			continue;
+		}else if (ev->type == EVENT_SYSCALL && ev->proc && 
+				ev->proc->state != STATE_IGNORED){
 			/* set up the shared memory region */
 			if (setting_up_shm == 0){
 				begin_setup_shmat(pid);
@@ -476,6 +481,8 @@ main(int argc, char *argv[]) {
 			handle_new(ev);
 		} else if (ev->type == EVENT_CLONE || ev->type == EVENT_VFORK ) {
 			handle_clone(ev);
+		} else if (ev->type == EVENT_EXEC){
+			handle_exec(ev);
 		}
 		//fprintf(stderr, "call: %d\n", ev->type);
 		if ( ev->proc )
